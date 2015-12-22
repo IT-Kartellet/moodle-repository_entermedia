@@ -14,6 +14,14 @@ $string['uri_exception'] = 'There was an error connecting to the server';
 $string['filters'] = 'Filters';
 $string['invalid_filters'] = 'Filters could not be parsed as JSON';
 
+$string['autologin_enable'] = 'Enable autologin';
+$string['autologin_user'] = 'Autologin username';
+$string['autologin_password'] = 'Autologin password';
+$string['autologin_error'] = 'Incorrect login';
+
+$string['autologin'] = 'Automatic login';
+$string['autologin_help'] = 'If you don\'t want your users to have to login in to entermedia with their own accounts, enable this setting, and provide a set of shared credentials below';
+
 // Search form
 $string['assettype'] = 'File type';
 $string['assettype_audio'] = 'Audio';

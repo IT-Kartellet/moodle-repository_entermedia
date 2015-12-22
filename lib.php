@@ -6,10 +6,14 @@ use GuzzleHttp\Exception\GuzzleException;
 
 class repository_entermedia extends repository {
 
+    private $config;
+
     public function __construct($repositoryid, $context, array $options, $readonly)
     {
         global $SESSION, $PAGE;
         parent::__construct($repositoryid, $context, $options, $readonly);
+
+        $this->config = get_config('entermedia');
 
         $PAGE->requires->js('/repository/entermedia/javascript/jquery.sumoselect.min.js');
         $PAGE->requires->yui_module('moodle-repository_entermedia-filepicker', 'M.repository_entermedia.filepicker.init');
@@ -20,23 +24,22 @@ class repository_entermedia extends repository {
         ), 'repository_entermedia');
 
         // Handle login
-        $this->username = optional_param('entermedia_username', '', PARAM_RAW);
-        $this->password = optional_param('entermedia_password', '', PARAM_RAW);
+        if ($this->config->autologin_enable == 1) {
+            $username = $this->config->autologin_user;
+            $password = $this->config->autologin_password;
+        } else {
+            $username = optional_param('entermedia_username', '', PARAM_RAW);
+            $password = optional_param('entermedia_password', '', PARAM_RAW);
+        }
+
         try{
-            if (empty($SESSION->entermediakey) && !empty($this->username) && !empty($this->password)) {
-                $response = $this->client()->post('authentication/getkey', array(
-                    'json' => array(
-                        'id' => $this->username,
-                        'password' => $this->password
-                    )
-                ));
+            if (empty($SESSION->entermediakey) && !empty($username) && !empty($password)) {
+                $maybeKey = $this->try_login($username, $password);
 
-                $body = json_decode($response->getBody());
-
-                if (@$body->response->status === 'ok') {
-                    $this->entermediakey = $SESSION->entermediakey = $body->results->entermediakey;
+                if ($maybeKey) {
+                    $this->entermediakey = $SESSION->entermediakey = $maybeKey;
                 } else {
-                    // Handle wrong login
+                    // TODO Handle error
                 }
             } else {
                 if (!empty($SESSION->entermediakey)) {
@@ -46,6 +49,30 @@ class repository_entermedia extends repository {
         } catch (GuzzleException $e) {
             $this->logout();
         }
+    }
+
+    private static function static_try_login($uri, $username, $password) {
+        $client = new Client($params = array(
+            'base_uri' => $uri . 'mediadb/services/'
+        ));
+        $response = $client->post('authentication/getkey', array(
+            'json' => array(
+                'id' => $username,
+                'password' => $password
+            )
+        ));
+
+        $body = json_decode($response->getBody());
+
+        if (@$body->response->status === 'ok' && isset($body->results->entermediakey)) {
+            return $body->results->entermediakey;
+        } else {
+            return false;
+        }
+    }
+
+    public function try_login($username, $password) {
+        return repository_entermedia::static_try_login($this->config->uri, $username, $password);
     }
 
     public function print_login()
@@ -158,7 +185,7 @@ class repository_entermedia extends repository {
 
         $cache = cache::make('repository_entermedia', 'filters');
         if (!$cache->has('filters')) {
-            $filters = json_decode(get_config('entermedia', 'filters'), true);
+            $filters = json_decode($this->config->filters, true);
             $cache->set('filters', $filters);
         }
         $filters = $cache->get('filters');
@@ -356,7 +383,11 @@ class repository_entermedia extends repository {
                 'list' => $list
             );
         } else {
-            // TODO
+            return array(
+                'page' => $page,
+                'pages' => 0,
+                'list' => array()
+            );
         }
     }
 
@@ -368,7 +399,7 @@ class repository_entermedia extends repository {
     // SETTINGS
     public static function get_type_option_names()
     {
-        return array_merge(parent::get_type_option_names(), array('uri', 'filters'));
+        return array_merge(parent::get_type_option_names(), array('uri', 'filters', 'autologin_enable', 'autologin_user', 'autologin_password'));
     }
 
     public static function type_config_form($mform, $classname = 'repository') {
@@ -379,6 +410,20 @@ class repository_entermedia extends repository {
 
         $mform->addElement('textarea', 'filters', get_string('filters', 'repository_entermedia'));
         $mform->setType('filters', PARAM_TEXT);
+
+        $mform->addElement('checkbox', 'autologin_enable', get_string('autologin_enable', 'repository_entermedia'));
+        $mform->setType('autologin_enable', PARAM_TEXT);
+
+        $mform->addHelpButton('autologin_enable', 'autologin', 'repository_entermedia');
+
+        $mform->addElement('text', 'autologin_user', get_string('autologin_user', 'repository_entermedia'));
+        $mform->setType('autologin_user', PARAM_TEXT);
+
+        $mform->addElement('passwordunmask', 'autologin_password', get_string('autologin_password', 'repository_entermedia'));
+        $mform->setType('autologin_password', PARAM_TEXT);
+
+        $mform->disabledIf('autologin_user', 'autologin_enable');
+        $mform->disabledIf('autologin_password', 'autologin_enable');
     }
 
     public static function type_form_validation($mform, $data, $errors)
@@ -407,6 +452,12 @@ class repository_entermedia extends repository {
             $errors['uri'] = get_string('uri_exception', 'repository_entermedia');
         }
 
+        if (isset($data['autologin_enable'])) {
+            if (!repository_entermedia::static_try_login($data['uri'], $data['autologin_user'], $data['autologin_password'])) {
+                $errors['autologin_enable'] = get_string('autologin_error', 'repository_entermedia');
+            }
+        }
+
         // A little bit hacky to empty the cache here...
         $cache = cache::make('repository_entermedia', 'filters');
         $cache->delete('filters');
@@ -417,7 +468,7 @@ class repository_entermedia extends repository {
     // UTIL
     private function client() {
         $params = array(
-            'base_uri' => get_config('entermedia', 'uri') . 'mediadb/services/'
+            'base_uri' => $this->config->uri . 'mediadb/services/'
         );
 
         if (!empty($this->entermediakey)) {
@@ -429,7 +480,7 @@ class repository_entermedia extends repository {
 
     private function base_url() {
         // todo - other catalogs than public?
-        return get_config('entermedia', 'uri') . 'media/catalogs/public/downloads';
+        return $this->config->uri . 'media/catalogs/public/downloads';
     }
 
     private function get_url($file) {
